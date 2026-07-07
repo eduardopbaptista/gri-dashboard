@@ -1,0 +1,32 @@
+name: Sync GRI Dashboard
+
+on:
+  schedule:
+    - cron: '0 11 * * *'   # Todo dia às 8h horário de Brasília (11h UTC)
+  workflow_dispatch:         # Permite rodar manualmente a qualquer hora
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Baixar repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Atualizar dashboard com dados do Salesforce
+        env:
+          CULKIN_API_KEY: ${{ secrets.CULKIN_API_KEY }}
+        run: python3 sync_dashboard.py index.html
+
+      - name: Publicar versão atualizada
+        run: |
+          git config user.name "GRI Dashboard Bot"
+          git config user.email "eduardo.baptista@griinstitute.org"
+          git add index.html
+          git diff --staged --quiet || git commit -m "sync: $(date +'%Y-%m-%d %H:%M') UTC"
+          git push
