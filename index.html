@@ -2103,8 +2103,8 @@ function renderCWLChart(){
   if(wrap)wrap.style.height=h+'px';
   const totals={};allKeys.forEach(k=>{totals[k]=sorted.reduce((s,d)=>s+(d[k]||0),0);});
   const grand=allKeys.reduce((s,k)=>s+totals[k],0);
-  if(summary)summary.innerHTML=`<div class="wl-sum-pill"><span class="wl-sum-count">${grand}</span><span class="wl-sum-label">Total</span></div>`+allKeys.map(k=>`<div class="wl-sum-pill"><span class="wl-sum-count">${totals[k]}</span><span class="wl-sum-label">${CWL_STATUS_LABELS_A[k]||k}</span></div>`).join('');
-  if(legend)legend.innerHTML=allKeys.map(k=>`<span class="wl-legend-dot" style="background:${CWL_STATUS_COLORS_A[k]||'#888'}"></span><span>${CWL_STATUS_LABELS_A[k]||k}</span>`).join('');
+  if(summary)summary.innerHTML=`<div class="wl-sum-pill"><span class="wl-sum-count">${grand}</span><span class="wl-sum-label">Total</span></div>`+allKeys.map(k=>`<div class="wl-sum-pill"><div class="wl-sum-dot" style="background:${CWL_STATUS_COLORS_A[k]||'#888'}"></div><span class="wl-sum-count">${totals[k]}</span><span class="wl-sum-label">${CWL_STATUS_LABELS_A[k]||k}</span></div>`).join('');
+  if(legend)legend.innerHTML=allKeys.map(k=>`<div class="wl-leg-item"><div class="wl-leg-dot" style="background:${CWL_STATUS_COLORS_A[k]||'#888'}"></div>${CWL_STATUS_LABELS_A[k]||k}</div>`).join('');
   const ctx=document.getElementById('a-cwlChart');if(!ctx)return;
   cwlChartInstA=new Chart(ctx,{type:'bar',data:{labels:sorted.map(d=>d.session.length>50?d.session.slice(0,48)+'…':d.session),datasets:allKeys.map(k=>({label:CWL_STATUS_LABELS_A[k]||k,data:sorted.map(d=>d[k]||0),backgroundColor:CWL_STATUS_COLORS_A[k]||'#888',stack:'cwl',borderRadius:3,barThickness:14}))},options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{title:items=>items[0].label}}},scales:{x:{stacked:true,grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'var(--text3)',font:{size:11}}},y:{stacked:true,grid:{display:false},ticks:{color:'var(--text2)',font:{size:12},autoSkip:false}}}}});
   cwlChartInstA.resize();
