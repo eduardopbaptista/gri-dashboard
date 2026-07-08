@@ -572,6 +572,69 @@ def patch_hub_events(html: str, totals: dict, event_names: dict) -> str:
     return html[:s + len(start_tag)] + block + html[e:]
 
 
+# ── WL Chart Data (pipeline por sessão) ──────────────────────────────────────
+
+def fetch_wl_chart_data(event_id: str) -> list:
+    """Busca pipeline por sessão agrupado por event_attendees_status__c."""
+    print(f"    → Buscando WL pipeline por sessão (mv_wishlist_snapshot)...")
+    rows = call_analytics(
+        "mv_wishlist_snapshot",
+        where=f"eventid = '{event_id}'",
+        limit=1000,
+    )
+    if not rows:
+        print("    ℹ Sem dados de pipeline.")
+        return []
+
+    STATUS_MAP = {
+        "Pending Allocation": "Pending",
+        "Draft":              "Draft",
+        "Invited":            "Invited",
+        "Pre-Confirmed":      "Pre_Confirmed",
+        "Registered":         "Registered",
+    }
+
+    from collections import defaultdict
+    sessions: dict = defaultdict(lambda: {"Draft": 0, "Invited": 0, "Pre_Confirmed": 0, "Registered": 0, "Pending": 0})
+
+    for r in rows:
+        title      = (r.get("sessiontitle") or "").strip()
+        raw_status = (r.get("event_attendees_status__c") or "").strip()
+        key        = STATUS_MAP.get(raw_status)
+        if title and key:
+            sessions[title][key] += 1
+
+    result = []
+    for title, counts in sessions.items():
+        entry = {"session": title}
+        entry.update({k: v for k, v in counts.items() if v > 0})
+        if len(entry) > 1:
+            result.append(entry)
+
+    result.sort(key=lambda x: sum(v for k, v in x.items() if k != "session"), reverse=True)
+    print(f"    WL pipeline: {len(result)} sessão(ões) com dados")
+    return result
+
+
+def patch_wl_chart_data(html: str, marker: str, chart_data: list) -> str:
+    """Atualiza WL_CHART_DATA entre marcadores SYNC_{marker}_WL_CHART."""
+    start_tag = f"/*%%SYNC_{marker}_WL_CHART_START%%*/"
+    end_tag   = f"/*%%SYNC_{marker}_WL_CHART_END%%*/"
+    s = html.find(start_tag)
+    e = html.find(end_tag)
+    if s == -1 or e == -1:
+        print(f"  ⚠ Marcador SYNC_{marker}_WL_CHART não encontrado — pulando.")
+        return html
+    new_block = (
+        f"{start_tag}\n"
+        f"const WL_CHART_DATA = {json.dumps(chart_data, ensure_ascii=False, separators=(',', ':'))};\n"
+        f"{end_tag}"
+    )
+    html = html[:s] + new_block + html[e + len(end_tag):]
+    print(f"  ✓ WL_CHART_DATA atualizado para {marker}: {len(chart_data)} sessão(ões)")
+    return html
+
+
 # ── Event Sales (Total Sold) ──────────────────────────────────────────────────
 
 def fetch_event_sales(event_name: str) -> int:
@@ -782,7 +845,19 @@ def main():
         hub_totals[key]  = (total_conf, total_tent)
         event_names[key] = ev["name"]
 
-    # ── 6. Atualiza co-chairs por país (todos os eventos) ────────────────────
+    # ── 6. Atualiza WL pipeline chart por evento ─────────────────────────────
+    print("\n📊 Atualizando WL pipeline chart...")
+    for key, ev in all_events.items():
+        wl_marker  = ev["marker"]
+        start_tag  = f"/*%%SYNC_{wl_marker}_WL_CHART_START%%*/"
+        if start_tag not in html:
+            continue
+        print(f"  {ev['name']}")
+        chart_data = fetch_wl_chart_data(ev["id"])
+        if chart_data:
+            html = patch_wl_chart_data(html, wl_marker, chart_data)
+
+    # ── 7. Atualiza co-chairs por país (todos os eventos) ─────────────────────
     # Qualquer evento com marcador /*%%SYNC_{MARKER}_COUNTRY_START%%*/ no HTML
     # terá seus dados de país atualizados automaticamente.
     print("\n🌍 Atualizando co-chairs por país...")
@@ -796,7 +871,7 @@ def main():
         if country_data:
             html = patch_country_data(html, country_marker, country_data)
 
-    # ── 7. Atualiza Total Sold por evento ────────────────────────────────────
+    # ── 8. Atualiza Total Sold por evento ────────────────────────────────────
     # Marcador padrão: {MARKER}_SALES — ex: HOSP_SALES
     # Só atualiza se o marcador existir no HTML (não força em todos os eventos).
     print("\n💰 Atualizando Total Sold...")
@@ -810,11 +885,11 @@ def main():
         if total_sold > 0:
             html = patch_event_sales(html, sales_marker, total_sold)
 
-    # ── 8. Atualiza hub cards (totais) ───────────────────────────────────────
+    # ── 9. Atualiza hub cards (totais) ───────────────────────────────────────
     print("\n🃏 Atualizando hub cards...")
     html = patch_hub_events(html, hub_totals, event_names)
 
-    # ── 9. Salva com backup ──────────────────────────────────────────────────
+    # ── 10. Salva com backup ─────────────────────────────────────────────────
     backup_path = html_path.replace(".html", f"_backup_{date.today().isoformat()}.html")
     if not os.path.exists(backup_path):
         with open(html_path, "r", encoding="utf-8") as f:
