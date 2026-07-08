@@ -572,6 +572,42 @@ def patch_hub_events(html: str, totals: dict, event_names: dict) -> str:
     return html[:s + len(start_tag)] + block + html[e:]
 
 
+# ── Event Sales (Total Sold) ──────────────────────────────────────────────────
+
+def fetch_event_sales(event_name: str) -> int:
+    """Soma amount_after_discount_original de oportunidades won do evento."""
+    print(f"    → Buscando Total Sold (mv_streamlit_opportunities)...")
+    safe_name = event_name.replace("'", "''")
+    rows = call_analytics(
+        "mv_streamlit_opportunities",
+        where=f"event_name = '{safe_name}' AND is_won = true AND bucket = 'Events'",
+        limit=500,
+    )
+    if not rows:
+        print("    ℹ Sem vendas encontradas.")
+        return 0
+    total = sum(r.get("amount_after_discount_original") or 0 for r in rows)
+    print(f"    Total Sold: USD {total:,.0f} ({len(rows)} oportunidade(s) won)")
+    return int(total)
+
+
+def patch_event_sales(html: str, sales_marker: str, total_sold: int) -> str:
+    """Atualiza o campo 'current' em {sales_marker} sem alterar 'target'."""
+    start_tag = f"/*%%{sales_marker}_START%%*/"
+    end_tag   = f"/*%%{sales_marker}_END%%*/"
+    s = html.find(start_tag)
+    e = html.find(end_tag)
+    if s == -1 or e == -1:
+        print(f"  ⚠ Marcador {sales_marker} não encontrado — pulando.")
+        return html
+    block = html[s + len(start_tag):e]
+    # Atualiza apenas o current, preserva target
+    block = re.sub(r"current:\s*\d+", f"current:{total_sold}", block)
+    html = html[:s + len(start_tag)] + block + html[e:]
+    print(f"  ✓ {sales_marker} atualizado: current={total_sold}")
+    return html
+
+
 # ── Country Data ─────────────────────────────────────────────────────────────
 
 def fetch_country_data(event_name: str) -> dict:
@@ -760,11 +796,25 @@ def main():
         if country_data:
             html = patch_country_data(html, country_marker, country_data)
 
-    # ── 7. Atualiza hub cards (totais) ───────────────────────────────────────
+    # ── 7. Atualiza Total Sold por evento ────────────────────────────────────
+    # Marcador padrão: {MARKER}_SALES — ex: HOSP_SALES
+    # Só atualiza se o marcador existir no HTML (não força em todos os eventos).
+    print("\n💰 Atualizando Total Sold...")
+    for key, ev in all_events.items():
+        sales_marker = f"{ev['marker']}_SALES"
+        start_tag = f"/*%%{sales_marker}_START%%*/"
+        if start_tag not in html:
+            continue  # evento sem gauge de vendas — pula silenciosamente
+        print(f"  {ev['name']}")
+        total_sold = fetch_event_sales(ev["name"])
+        if total_sold > 0:
+            html = patch_event_sales(html, sales_marker, total_sold)
+
+    # ── 8. Atualiza hub cards (totais) ───────────────────────────────────────
     print("\n🃏 Atualizando hub cards...")
     html = patch_hub_events(html, hub_totals, event_names)
 
-    # ── 8. Salva com backup ──────────────────────────────────────────────────
+    # ── 9. Salva com backup ──────────────────────────────────────────────────
     backup_path = html_path.replace(".html", f"_backup_{date.today().isoformat()}.html")
     if not os.path.exists(backup_path):
         with open(html_path, "r", encoding="utf-8") as f:
