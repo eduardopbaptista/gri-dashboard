@@ -285,12 +285,15 @@ def generate_dash_div(ev_info: dict, marker: str, dash_id: str) -> str:
     name = ev_info["name"]
     sm   = f"/*%%SYNC_{marker}_SESSIONS_START%%*/"
     em   = f"/*%%SYNC_{marker}_SESSIONS_END%%*/"
+    cm   = f"/*%%SYNC_{marker}_COUNTRY_START%%*/"
+    cem  = f"/*%%SYNC_{marker}_COUNTRY_END%%*/"
     return (
         f'\n<!-- AUTO-GENERATED: {name} -->\n'
         f'<div id="{dash_id}" class="dashboard hidden"'
         f' data-sf-event-id="{ev_info["id"]}">\n'
         f'  <script>\n'
         f'    {sm}const SESSIONS = [];{em}\n'
+        f'    {cm}const COUNTRY_DATA = {{}};{cem}\n'
         f'  </script>\n'
         f'</div>'
     )
@@ -569,6 +572,50 @@ def patch_hub_events(html: str, totals: dict, event_names: dict) -> str:
     return html[:s + len(start_tag)] + block + html[e:]
 
 
+# ── Country Data ─────────────────────────────────────────────────────────────
+
+def fetch_country_data(event_name: str) -> dict:
+    """Busca co-chairs confirmados por país no mv_members_future_events."""
+    print(f"    → Buscando co-chairs por país (mv_members_future_events)...")
+    safe_name = event_name.replace("'", "''")
+    rows = call_analytics(
+        "mv_members_future_events",
+        where=f"event_name = '{safe_name}' AND session_status = 'Co-chair - Confirmed'",
+        limit=500,
+    )
+    if not rows:
+        print("    ℹ Sem dados de país retornados.")
+        return {}
+    from collections import Counter
+    counts = Counter()
+    for r in rows:
+        country = (r.get("mailingcountry") or "").strip()
+        if country:
+            counts[country] += 1
+    result = dict(counts.most_common())
+    print(f"    País breakdown: { {k: v for k, v in result.items()} }")
+    return result
+
+
+def patch_country_data(html: str, marker: str, country_data: dict) -> str:
+    """Atualiza COUNTRY_DATA entre os marcadores SYNC_{marker}_COUNTRY."""
+    start_tag = f"/*%%SYNC_{marker}_COUNTRY_START%%*/"
+    end_tag   = f"/*%%SYNC_{marker}_COUNTRY_END%%*/"
+    s = html.find(start_tag)
+    e = html.find(end_tag)
+    if s == -1 or e == -1:
+        print(f"  ⚠ Marcador SYNC_{marker}_COUNTRY não encontrado — pulando country data.")
+        return html
+    new_block = (
+        f"{start_tag}\n"
+        f"const COUNTRY_DATA = {json.dumps(country_data, ensure_ascii=False)};\n"
+        f"{end_tag}"
+    )
+    html = html[:s] + new_block + html[e + len(end_tag):]
+    print(f"  ✓ COUNTRY_DATA atualizado para {marker}: {country_data}")
+    return html
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -699,11 +746,25 @@ def main():
         hub_totals[key]  = (total_conf, total_tent)
         event_names[key] = ev["name"]
 
-    # ── 6. Atualiza hub cards (totais) ───────────────────────────────────────
+    # ── 6. Atualiza co-chairs por país (todos os eventos) ────────────────────
+    # Qualquer evento com marcador /*%%SYNC_{MARKER}_COUNTRY_START%%*/ no HTML
+    # terá seus dados de país atualizados automaticamente.
+    print("\n🌍 Atualizando co-chairs por país...")
+    for key, ev in all_events.items():
+        country_marker = ev["marker"]
+        start_tag = f"/*%%SYNC_{country_marker}_COUNTRY_START%%*/"
+        if start_tag not in html:
+            continue  # evento sem marcador de país — pula silenciosamente
+        print(f"  {ev['name']}")
+        country_data = fetch_country_data(ev["name"])
+        if country_data:
+            html = patch_country_data(html, country_marker, country_data)
+
+    # ── 7. Atualiza hub cards (totais) ───────────────────────────────────────
     print("\n🃏 Atualizando hub cards...")
     html = patch_hub_events(html, hub_totals, event_names)
 
-    # ── 7. Salva com backup ──────────────────────────────────────────────────
+    # ── 8. Salva com backup ──────────────────────────────────────────────────
     backup_path = html_path.replace(".html", f"_backup_{date.today().isoformat()}.html")
     if not os.path.exists(backup_path):
         with open(html_path, "r", encoding="utf-8") as f:
